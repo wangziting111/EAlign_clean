@@ -88,8 +88,9 @@ experiments/
 └── 03_sabmark_retrieval/
 ```
 
-Benchmark coordinates, reference alignments, and third-party executables are
-not bundled. See `experiments/README.md` for the expected directory layout,
+Benchmark datasets and saved analysis results are provided as separate ZIP
+archives in this repository. Third-party executables are not bundled. See
+`experiments/README.md` for the expected directory layout,
 dependencies, exact commands, output locations, and benchmark protocol.
 
 The reported experiments used CentOS Linux 8, GCC/G++ 8.5.0, two Intel Xeon
