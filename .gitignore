@@ -1,0 +1,19 @@
+binary/
+test_results/
+__pycache__/
+*.py[cod]
+.DS_Store
+._*
+
+# Generated SABmark metadata, coordinates, manifests, logs, and results.
+experiments/03_sabmark_retrieval/structures/
+experiments/03_sabmark_retrieval/supfp/*.jsonl
+experiments/03_sabmark_retrieval/twifp/*.jsonl
+experiments/03_sabmark_retrieval/supfp/manifests/
+experiments/03_sabmark_retrieval/twifp/manifests/
+experiments/03_sabmark_retrieval/supfp/reports/
+experiments/03_sabmark_retrieval/twifp/reports/
+experiments/03_sabmark_retrieval/supfp/results/
+experiments/03_sabmark_retrieval/twifp/results/
+experiments/03_sabmark_retrieval/supfp/logs/
+experiments/03_sabmark_retrieval/twifp/logs/

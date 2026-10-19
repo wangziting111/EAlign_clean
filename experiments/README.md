@@ -1,0 +1,209 @@
+# Reproducing the EAlign experiments
+
+This directory contains the scripts used for the three experiment sections in
+the EAlign paper. Run commands from the repository root unless stated
+otherwise. Benchmark data and the saved results required by the analysis
+scripts are distributed as separate archives; third-party programs are not
+redistributed.
+
+## Released data and result archives
+
+Extract the following archives in the repository root. Their paths already
+match the layouts used by the scripts below.
+
+| Archive | Contents |
+| --- | --- |
+| `EAlign-pairwise-data.zip` | MALISAM, MALIDUP, HOMSTRAD, and prepared HOMSTRAD structures |
+| `EAlign-SABmark-data.zip` | SCOP 1.65 structures plus SupFP/TwiFP manifests and reference metadata |
+| `EAlign-paper-results.zip` | Saved pairwise, ablation, and SABmark summary results needed to rerun the analyses and figures |
+
+you can download from [zenodo] (https://zenodo.org/uploads/23476316).
+
+```bash
+unzip EAlign-pairwise-data.zip
+unzip EAlign-SABmark-data.zip
+unzip EAlign-paper-results.zip
+```
+
+## Environment
+
+The reported experiments used CentOS Linux 8, GCC/G++ 8.5.0, two Intel Xeon
+Gold 5218 CPUs, and CPU-only execution. Build EAlign before running the
+experiments:
+
+```bash
+make -j
+python3 -m pip install -r experiments/requirements.txt
+```
+
+Python 3.9 or newer is recommended. Most runners use only the standard
+library; NumPy is required for bootstrap analyses and Matplotlib for figures.
+
+The baseline executables are expected at these default locations:
+
+```text
+baselines/DeepAlign/DeepAlign
+baselines/TMalign/TMalign
+baselines/DaliLite.v5/bin/dali.pl
+```
+
+All runners that invoke an aligner also accept an explicit binary path.
+
+## 1. Curated pairwise alignment and runtime
+
+Scripts: `01_pairwise_alignment/`
+
+This experiment evaluates 130 MALISAM pairs, 241 MALIDUP pairs, and 1,032
+HOMSTRAD pairs. Only uppercase-uppercase columns in the released manual
+alignments define reference residue pairs.
+
+Expected data layout:
+
+```text
+dataset/
+├── pdblistsam.csv
+├── pdblistdup.csv
+├── Malisam/<pair-id>/...
+└── Malidup/<pair-id>/...
+data/HOMSTRAD/<family>/
+├── <family>.ali
+└── <family>-sup.pdb
+```
+
+Prepare the first/last-member HOMSTRAD structures:
+
+```bash
+python3 experiments/01_pairwise_alignment/split_HOMSTRAD.py \
+  --homstrad-root data/HOMSTRAD \
+  --output-root test_results/HOMSTRAD_split_structures
+```
+
+Run EAlign and the two non-DALI baselines sequentially. The shared output root
+is important because the evaluator reads all three methods from it.
+
+```bash
+python3 experiments/01_pairwise_alignment/run_pairwise_alignment.py \
+  --method ealign --workers 1 --output-root test_results/pairwise_runs
+
+python3 experiments/01_pairwise_alignment/run_pairwise_alignment.py \
+  --method deepalign --workers 1 --output-root test_results/pairwise_runs
+
+python3 experiments/01_pairwise_alignment/run_pairwise_alignment.py \
+  --method tmalign --workers 1 --output-root test_results/pairwise_runs
+```
+
+Run DaliLite v5 independently for each benchmark:
+
+```bash
+for benchmark in malisam malidup homstrad; do
+  python3 experiments/01_pairwise_alignment/run_homstrad_dali_direct.py \
+    --benchmark "$benchmark" --jobs 1 \
+    --output-root "test_results/${benchmark}_dali"
+done
+```
+
+Score residue correspondences and reproduce the paired bootstrap intervals:
+
+```bash
+python3 experiments/01_pairwise_alignment/evaluate_pairwise_alignment.py \
+  --binary-root test_results/pairwise_runs \
+  --dali-malisam test_results/malisam_dali \
+  --dali-malidup test_results/malidup_dali \
+  --dali-homstrad test_results/homstrad_dali
+
+python3 experiments/01_pairwise_alignment/analyze_pairwise_evaluation.py
+```
+
+Generate the runtime and geometry summaries and the HOMSTRAD scaling figure:
+
+```bash
+python3 experiments/01_pairwise_alignment/summarize_pairwise_runtime.py
+python3 experiments/01_pairwise_alignment/summarize_geometry_superposition.py
+python3 experiments/01_pairwise_alignment/plot_homstrad_runtime_deciles.py
+```
+
+
+## 2. EAlign score ablation
+
+Scripts: `02_score_ablation/`
+
+The five paper configurations are:
+
+| Configuration | Evidence mode | Geometry mode |
+| --- | ---: | ---: |
+| Full EAlign | AA + 3Di | orientation x distance |
+| without AA | 3Di only | orientation x distance |
+| without 3Di | AA only | orientation x distance |
+| without orientation | AA + 3Di | distance only |
+| without distance | AA + 3Di | orientation only |
+
+Build and run all five configurations with the same benchmark driver:
+
+```bash
+python3 experiments/02_score_ablation/ablation_ealign_score.py \
+  --baseline --all --jobs 8 --workers 1
+```
+
+The driver writes each binary under `binary/` and each benchmark result under
+`test_results/full_alignment_<binary-name>/`. Reproduce the table and paired
+bootstrap confidence intervals with:
+
+```bash
+python3 experiments/02_score_ablation/analyze_ealign_score_ablation.py \
+  --bootstrap 10000 --seed 42
+```
+
+The MALISAM rescued-failure and coherent-shift analyses are generated by:
+
+```bash
+python3 experiments/02_score_ablation/analyze_ealign_score_mechanisms.py
+python3 experiments/02_score_ablation/plot_ealign_score_maximum_cases.py
+```
+
+The ablation runner uses the same curated data layout described in part 1.
+
+## 3. SABmark SupFP and TwiFP retrieval
+
+Scripts: `03_sabmark_retrieval/`
+
+The benchmark protocol follows the
+[SABmark paper](https://academic.oup.com/bioinformatics/article/21/7/1267/268759).
+The released structure coordinates come from SCOP 1.65, and the SupFP/TwiFP
+pair and reference metadata come from the
+[DeepFoldProtein SABmark dataset](https://huggingface.co/datasets/DeepFoldProtein/SABmark-dataset)
+([DeepFoldProtein datasets](https://huggingface.co/datasets/DeepFoldProtein/)).
+The prepared files are provided in `EAlign-SABmark-data.zip`; 
+
+Run the three methods with eight independent workers:
+
+```bash
+for subset in supfp twifp; do
+  python3 experiments/03_sabmark_retrieval/run_twi_sup_fp_ealign.py \
+    "$subset" --workers 8
+  python3 experiments/03_sabmark_retrieval/run_twi_sup_fp_deepalign.py \
+    "$subset" --workers 8
+  python3 experiments/03_sabmark_retrieval/run_twi_sup_fp_tmalign.py \
+    "$subset" --workers 8
+done
+```
+
+Compute query-macro AUROC, mean average precision, and ROC1:
+
+```bash
+python3 experiments/03_sabmark_retrieval/evaluate_retrieval_metrics.py \
+  --subset supfp
+python3 experiments/03_sabmark_retrieval/evaluate_retrieval_metrics.py \
+  --subset twifp
+```
+
+EAlign and DeepAlign scores are divided by the shorter structure length;
+TM-align uses its shorter-length-normalized TM-score. Seven SupFP queries with
+no negative targets are excluded consistently from all three metrics.
+
+## Smoke tests and resuming
+
+Use `--limit` for curated benchmark smoke tests and `--query` for selected
+SABmark queries. The pairwise and SABmark runners save per-job JSON metadata,
+raw stdout/stderr, executable hashes, and input hashes where applicable. They
+reuse completed compatible jobs unless `--overwrite` is supplied.
+
