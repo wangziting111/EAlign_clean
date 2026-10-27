@@ -2,8 +2,8 @@
 """Paired-bootstrap comparison of methods in the pairwise evaluation.
 
 The script reads saved per-pair scores; it does not rerun an alignment method.
-With no arguments, it reproduces the paper comparisons of EAlign against
-DeepAlign, TM-align, and DALI on HOMSTRAD, MALIDUP, and MALISAM.
+With no arguments, it reproduces the paper comparisons of EAlign against all
+seven baselines on HOMSTRAD, MALIDUP, and MALISAM.
 
 Examples:
 
@@ -29,12 +29,24 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_DATASETS = ("homstrad", "malidup", "malisam")
-DEFAULT_METHOD2 = ("deepalign", "tmalign", "dali")
+DEFAULT_METHOD2 = (
+    "deepalign",
+    "tmalign",
+    "dali",
+    "gtalign_cuda",
+    "gtalign_patched_cpu",
+    "gtalign_patched_cpu_t20",
+    "foldseek",
+)
 METHOD_LABELS = {
     "ealign": "EAlign",
     "deepalign": "DeepAlign",
     "tmalign": "TM-align",
     "dali": "DALI",
+    "gtalign_cuda": "GTalign-CUDA",
+    "gtalign_patched_cpu": "GTalign-CPU-1",
+    "gtalign_patched_cpu_t20": "GTalign-CPU-20",
+    "foldseek": "Foldseek",
 }
 REQUIRED_COLUMNS = {"benchmark", "method", "id", "f1"}
 
@@ -47,10 +59,18 @@ def method_name(value: str) -> str:
         "tmalign": "tmalign",
         "dali": "dali",
         "dalilite": "dali",
+        "gtaligncuda": "gtalign_cuda",
+        "gtaligngpu": "gtalign_cuda",
+        "gtalignpatchedcpu": "gtalign_patched_cpu",
+        "gtaligncpu1": "gtalign_patched_cpu",
+        "gtalignpatchedcput20": "gtalign_patched_cpu_t20",
+        "gtaligncpu20": "gtalign_patched_cpu_t20",
+        "foldseek": "foldseek",
     }
     if normalized not in aliases:
         raise argparse.ArgumentTypeError(
-            f"unknown method {value!r}; choose EAlign, DeepAlign, TM-align, or DALI"
+            f"unknown method {value!r}; choose EAlign, DeepAlign, TM-align, DALI, "
+            "GTalign-CUDA, GTalign-CPU-1, GTalign-CPU-20, or Foldseek"
         )
     return aliases[normalized]
 
@@ -69,7 +89,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input-csv",
         type=Path,
-        default=REPO / "test_results/pairwise_evaluation/per_pair.csv",
+        default=REPO / "test_results/01_pairwise_alignment/evaluation/per_pair.csv",
     )
     parser.add_argument(
         "--method1",
@@ -84,7 +104,7 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help=(
             "Second method; repeat for multiple comparisons. The default is "
-            "DeepAlign, TM-align, and DALI when method1 is EAlign."
+            "all seven baselines when method1 is EAlign."
         ),
     )
     parser.add_argument(
@@ -100,7 +120,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=REPO / "test_results/pairwise_evaluation_statistics",
+        default=REPO / "test_results/01_pairwise_alignment/statistics",
     )
     args = parser.parse_args()
     if args.bootstrap <= 0:

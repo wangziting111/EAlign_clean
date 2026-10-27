@@ -19,12 +19,12 @@ article:
 
 EAlign requires GNU Make and a C++ compiler. The paper experiments used
 GCC/G++ 8.5.0 on Linux with `-O3`.
+The C++ sources and headers are under `src/`; intermediate objects are written
+to `build/`, and the final executable is written to `binary/ealign`.
 
 ```bash
 make -j
 ```
-
-The executable is written to `binary/ealign`.
 
 To remove generated objects and the executable:
 

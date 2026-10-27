@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Score EAlign/DeepAlign/TM-align/Dali against curated manual alignments.
+"""Score pairwise structure aligners against curated manual alignments.
 
 MALISAM, MALIDUP and HOMSTRAD truth: only uppercase-uppercase columns.
 Dali input is run_homstrad_dali_direct.py output, not released *.dali.ali.
@@ -11,22 +11,47 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import re
 from collections import Counter
 from pathlib import Path
 
-from run_pairwise_alignment import (BENCHMARKS, DEFAULT_OUTPUT, REPO, Case,
+from run_pairwise_alignment import (BENCHMARKS, REPO, Case,
                                     ca_sequence, load_cases, sequence, sha256)
 from split_HOMSTRAD import AA3
 
-DALI_ROOTS = {name: REPO / f"test_results/{name}_dali" for name in BENCHMARKS}
-METHODS = ("ealign", "deepalign", "tmalign", "dali")
+PAIRWISE_ROOT = REPO / "test_results/pairwise_runs"
+DALI_ROOTS = {
+    name: PAIRWISE_ROOT / "dali" / name
+    for name in BENCHMARKS
+}
+DEFAULT_METHODS = (
+    "ealign",
+    "deepalign",
+    "tmalign",
+    "dali",
+    "gtalign_cuda",
+    "gtalign_patched_cpu",
+    "gtalign_patched_cpu_t20",
+    "foldseek",
+)
+METHODS = DEFAULT_METHODS
+GTALIGN_METHODS = ("gtalign_cuda", "gtalign_patched_cpu")
 
 
-def residue_pairs(a: str, b: str, uppercase_only: bool = False) -> set[tuple[int, int]]:
+def is_gtalign_method(method: str) -> bool:
+    return method in GTALIGN_METHODS or re.fullmatch(r"gtalign_patched_cpu_t[2-9][0-9]*", method) is not None
+
+
+def is_supported_method(method: str) -> bool:
+    return method in METHODS or is_gtalign_method(method)
+
+
+def residue_pairs(a: str, b: str, uppercase_only: bool = False,
+                  offset_a: int = 0, offset_b: int = 0) -> set[tuple[int, int]]:
     if len(a) != len(b):
         raise ValueError("Alignment rows have different lengths")
-    i = j = 0
+    i, j = offset_a, offset_b
     pairs = set()
     for left, right in zip(a, b):
         if left.isalpha() and right.isalpha() and (not uppercase_only or left.isupper() and right.isupper()):
@@ -65,22 +90,177 @@ def tmalign_rows(path: Path) -> tuple[str, str]:
     return block[0], block[2]
 
 
+def checked_local_prediction(rows: tuple[str, str], struct: tuple[str, str],
+                             starts: tuple[int, int], ends: tuple[int, int],
+                             source: Path) -> set[tuple[int, int]]:
+    """Validate 1-based inclusive local ranges, then map aligned columns globally."""
+    parsed = tuple(sequence(row) for row in rows)
+    expected = tuple(seq[start - 1:end] for seq, start, end in zip(struct, starts, ends))
+    if min(*starts) < 1 or any(end < start for start, end in zip(starts, ends)):
+        raise ValueError(f"Invalid local alignment range in {source}: {starts}..{ends}")
+    if parsed != expected:
+        raise ValueError(
+            f"Output/PDB sequence-slice mismatch: {source}; "
+            f"starts={starts} ends={ends} parsed={tuple(map(len, parsed))} "
+            f"expected={tuple(map(len, expected))}"
+        )
+    return residue_pairs(*rows, offset_a=starts[0] - 1, offset_b=starts[1] - 1)
+
+
+def gtalign_prediction(path: Path, struct: tuple[str, str]) -> set[tuple[int, int]]:
+    payload = json.loads(path.read_text())
+    search = payload.get("gtalign_search")
+    if not isinstance(search, dict):
+        raise ValueError(f"Missing gtalign_search object: {path}")
+    hits = search.get("search_results", [])
+    if len(hits) != 1 or not isinstance(hits[0].get("hit_record"), dict):
+        raise ValueError(f"Expected exactly one GTalign hit: {path}")
+    alignment = hits[0]["hit_record"].get("alignment")
+    if not isinstance(alignment, dict):
+        raise ValueError(f"Missing GTalign alignment object: {path}")
+    rows = (str(alignment["query_aln"]), str(alignment["refrn_aln"]))
+    starts = (int(alignment["query_from"]), int(alignment["refn_from"]))
+    ends = (int(alignment["query_to"]), int(alignment["refn_to"]))
+    return checked_local_prediction(rows, struct, starts, ends, path)
+
+
+def pdb_ca_coordinates(path: Path) -> tuple[str, list[tuple[float, float, float]]]:
+    letters, coordinates = [], []
+    previous = None
+    for line in path.read_text(errors="replace").splitlines():
+        if not line.startswith(("ATOM  ", "HETATM")) or line[12:16].strip() != "CA":
+            continue
+        aa = AA3.get(line[17:20].strip().upper())
+        if aa is None:
+            continue
+        key = (line[21], line[22:26], line[26])
+        if key == previous:
+            continue
+        previous = key
+        letters.append(aa)
+        coordinates.append(tuple(float(line[start:start + 8]) for start in (30, 38, 46)))
+    return "".join(letters), coordinates
+
+
+def foldseek_ca_map(sequence_text: str, ca_text: str, pdb_path: Path,
+                    source: Path) -> list[int]:
+    values = [float(value) for value in ca_text.rstrip(",").split(",") if value]
+    if len(values) != 3 * len(sequence_text):
+        raise ValueError(f"Foldseek sequence/CA count mismatch: {source}")
+    foldseek_coordinates = list(zip(values[0::3], values[1::3], values[2::3]))
+    pdb_sequence, pdb_coordinates = pdb_ca_coordinates(pdb_path)
+    cell_size = 0.02
+    coordinate_index: dict[tuple[str, int, int, int], list[int]] = {}
+    for pdb_index, (letter, xyz) in enumerate(zip(pdb_sequence, pdb_coordinates)):
+        key = (letter, *(math.floor(value / cell_size) for value in xyz))
+        coordinate_index.setdefault(key, []).append(pdb_index)
+    mapping = []
+    for position, (letter, xyz) in enumerate(zip(sequence_text.upper(), foldseek_coordinates)):
+        cell = tuple(math.floor(value / cell_size) for value in xyz)
+        candidates = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    key = (letter, cell[0] + dx, cell[1] + dy, cell[2] + dz)
+                    for pdb_index in coordinate_index.get(key, []):
+                        pdb_xyz = pdb_coordinates[pdb_index]
+                        squared = sum((left - right) ** 2 for left, right in zip(xyz, pdb_xyz))
+                        if squared <= 0.0004:
+                            candidates.append((squared, pdb_index))
+        if not candidates:
+            raise ValueError(
+                f"Cannot map Foldseek residue {position + 1}/{len(sequence_text)} "
+                f"to {pdb_path}: {source}"
+            )
+        candidates.sort()
+        if len(candidates) > 1 and abs(candidates[0][0] - candidates[1][0]) < 1e-12:
+            raise ValueError(f"Ambiguous Foldseek CA coordinate at residue {position + 1}: {source}")
+        mapping.append(candidates[0][1])
+    return mapping
+
+
+def mapped_residue_pairs(rows: tuple[str, str], starts: tuple[int, int],
+                          ends: tuple[int, int], maps: tuple[list[int], list[int]],
+                          source: Path) -> set[tuple[int, int]]:
+    if len(rows[0]) != len(rows[1]):
+        raise ValueError(f"Foldseek alignment rows have different lengths: {source}")
+    positions = [starts[0] - 1, starts[1] - 1]
+    pairs = set()
+    for left, right in zip(*rows):
+        mapped = [None, None]
+        for side, letter in enumerate((left, right)):
+            if letter.isalpha():
+                if not 0 <= positions[side] < len(maps[side]):
+                    raise ValueError(f"Foldseek alignment index is out of range: {source}")
+                mapped[side] = maps[side][positions[side]]
+                positions[side] += 1
+        if mapped[0] is not None and mapped[1] is not None:
+            pairs.add((mapped[0], mapped[1]))
+    if tuple(positions) != ends:
+        raise ValueError(f"Foldseek alignment range mismatch: {source}; consumed={tuple(positions)} ends={ends}")
+    return pairs
+
+
+def foldseek_prediction(path: Path, pdb_paths: tuple[Path, Path]) -> set[tuple[int, int]]:
+    lines = [line for line in path.read_text(errors="replace").splitlines() if line.strip()]
+    if len(lines) != 1:
+        raise ValueError(f"Expected exactly one Foldseek row: {path}")
+    fields = (
+        "query", "target", "qstart", "qend", "tstart", "tend", "qlen", "tlen",
+        "qseq", "tseq", "qca", "tca", "qaln", "taln", "bits", "evalue", "prob", "alnlen",
+    )
+    values = lines[0].split("\t")
+    if len(values) != len(fields):
+        raise ValueError(f"Expected {len(fields)} Foldseek fields, found {len(values)}: {path}")
+    row = dict(zip(fields, values))
+    lengths = (int(row["qlen"]), int(row["tlen"]))
+    full_sequences = (row["qseq"], row["tseq"])
+    if lengths != tuple(map(len, full_sequences)):
+        raise ValueError(f"Foldseek qlen/tlen mismatch full sequences: {path}")
+    rows = (row["qaln"], row["taln"])
+    starts = (int(row["qstart"]), int(row["tstart"]))
+    ends = (int(row["qend"]), int(row["tend"]))
+    expected = tuple(text[start - 1:end].upper()
+                     for text, start, end in zip(full_sequences, starts, ends))
+    if tuple(sequence(aligned) for aligned in rows) != expected:
+        raise ValueError(f"Foldseek aligned/full-sequence mismatch: {path}")
+    maps = (
+        foldseek_ca_map(row["qseq"], row["qca"], pdb_paths[0], path),
+        foldseek_ca_map(row["tseq"], row["tca"], pdb_paths[1], path),
+    )
+    return mapped_residue_pairs(rows, starts, ends, maps, path)
+
+
 def binary_prediction(case: Case, method: str, root: Path) -> tuple[str, set[tuple[int, int]]]:
     folder = root / method / case.benchmark / case.case_id
     result = json.loads((folder / "result.json").read_text())
-    if (Path(result["pdb_a"]).resolve(), Path(result["pdb_b"]).resolve()) != (case.pdb_a.resolve(), case.pdb_b.resolve()):
-        raise ValueError(f"Input order changed: {folder}")
+    # Result bundles may be relocated after a run.  The ordered SHA-256 values
+    # below are the stable identity check; absolute paths are only provenance.
     for name, path in (("pdb_a", case.pdb_a), ("pdb_b", case.pdb_b)):
         if result["sha256"][name] != sha256(path):
             raise ValueError(f"Input changed since run: {path}")
     if result["status"] != "ok":
         return result["status"], set()
-    rows = tmalign_rows(folder / "stdout.txt") if method == "tmalign" else fasta_rows(folder / f"{case.case_id}.fasta")
     struct = (ca_sequence(case.pdb_a), ca_sequence(case.pdb_b))
-    parsed = tuple(sequence(row) for row in rows)
-    if parsed != struct:
-        raise ValueError(f"Output/PDB sequence mismatch: {folder}; {tuple(map(len, parsed))} != {tuple(map(len, struct))}")
-    return "ok", residue_pairs(*rows)
+    if method == "tmalign":
+        rows = tmalign_rows(folder / "stdout.txt")
+        parsed = tuple(sequence(row) for row in rows)
+        if parsed != struct:
+            raise ValueError(f"Output/PDB sequence mismatch: {folder}; {tuple(map(len, parsed))} != {tuple(map(len, struct))}")
+        prediction = residue_pairs(*rows)
+    elif method in ("ealign", "deepalign"):
+        rows = fasta_rows(folder / f"{case.case_id}.fasta")
+        parsed = tuple(sequence(row) for row in rows)
+        if parsed != struct:
+            raise ValueError(f"Output/PDB sequence mismatch: {folder}; {tuple(map(len, parsed))} != {tuple(map(len, struct))}")
+        prediction = residue_pairs(*rows)
+    elif is_gtalign_method(method):
+        prediction = gtalign_prediction(folder / "gtalign.json", struct)
+    elif method == "foldseek":
+        prediction = foldseek_prediction(folder / "foldseek.tsv", (case.pdb_a, case.pdb_b))
+    else:
+        raise ValueError(f"Unsupported binary method: {method}")
+    return "ok", prediction
 
 
 def pdb_dali_records(path: Path) -> dict[str, list[tuple[int, tuple[float, float, float]]]]:
@@ -135,17 +315,20 @@ def dat_map(dat_path: Path, pdb_path: Path) -> dict[int, int]:
 def dali_prediction(case: Case, root: Path) -> tuple[str, set[tuple[int, int]]]:
     folder = root / "pairs" / case.case_id
     result = json.loads((folder / "result.json").read_text())
-    source = (Path(result["pdb_a"]).resolve(), Path(result["pdb_b"]).resolve())
     expected = (case.pdb_a.resolve(), case.pdb_b.resolve())
-    if source == expected:
+    expected_hashes = tuple(sha256(path) for path in expected)
+    recorded_hashes = (
+        result["pdb_sha256"]["query"],
+        result["pdb_sha256"]["target"],
+    )
+    if recorded_hashes == expected_hashes:
+        source = expected
         swap = False
-    elif source == expected[::-1]:
+    elif recorded_hashes == expected_hashes[::-1]:
+        source = expected[::-1]
         swap = True
     else:
-        raise ValueError(f"Dali input paths do not match benchmark: {folder}")
-    for label, path in (("query", source[0]), ("target", source[1])):
-        if result["pdb_sha256"][label] != sha256(path):
-            raise ValueError(f"Dali input changed since run: {path}")
+        raise ValueError(f"Dali input hashes do not match benchmark: {folder}")
     if result["status"] == "no_hit":
         return "no_hit", set()
     if result["status"] != "hit":
@@ -218,16 +401,26 @@ def summarize(rows: list[dict]) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--benchmarks", nargs="+", choices=BENCHMARKS, default=list(BENCHMARKS))
-    parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(METHODS))
-    parser.add_argument("--binary-root", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--methods", nargs="+", default=list(DEFAULT_METHODS),
+        help="Methods to score; multithreaded CPU GTalign uses gtalign_patched_cpu_tN",
+    )
+    parser.add_argument("--binary-root", type=Path, default=PAIRWISE_ROOT)
     parser.add_argument("--dali-homstrad", type=Path, default=DALI_ROOTS["homstrad"])
     parser.add_argument("--dali-malisam", type=Path, default=DALI_ROOTS["malisam"])
     parser.add_argument("--dali-malidup", type=Path, default=DALI_ROOTS["malidup"])
     parser.add_argument("--split-root", type=Path, default=REPO / "test_results/HOMSTRAD_split_structures")
-    parser.add_argument("--output-root", type=Path, default=REPO / "test_results/pairwise_evaluation")
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=REPO / "test_results/01_pairwise_alignment/evaluation",
+    )
     parser.add_argument("--limit", type=int, default=0, help="First N pairs per benchmark")
     parser.add_argument("--allow-partial", action="store_true", help="Permit missing or invalid result files in a smoke test")
     args = parser.parse_args()
+    unsupported = [method for method in args.methods if not is_supported_method(method)]
+    if unsupported:
+        parser.error(f"unsupported --methods: {', '.join(unsupported)}")
     args.binary_root = args.binary_root.resolve()
     args.output_root = args.output_root.resolve()
     cases = load_cases(args.benchmarks, args.split_root)

@@ -28,22 +28,20 @@ from typing import Dict, List, Mapping, Sequence, Tuple
 
 
 REPO = Path(__file__).resolve().parents[2]
+RESULT_ROOT = REPO / "test_results/02_score_ablation"
+INPUT_ROOT = RESULT_ROOT / "ablation_inputs"
+DETAIL_ROOT = RESULT_ROOT / "ablation_details"
 DEFAULT_INPUTS = {
-    "full": REPO
-    / "test_results/full_alignment_ealign/ealign_alignment_benchmark.csv",
-    "without_vector": REPO
-    / "test_results/full_alignment_ealign_without_vector"
-    / "ealign_without_vector_alignment_benchmark.csv",
-    "without_3di": REPO
-    / "test_results/full_alignment_ealign_without_3di"
-    / "ealign_without_3di_alignment_benchmark.csv",
+    "full": INPUT_ROOT / "ealign_alignment_benchmark.csv",
+    "without_vector": (
+        INPUT_ROOT / "ealign_without_vector_alignment_benchmark.csv"
+    ),
+    "without_3di": INPUT_ROOT / "ealign_without_3di_alignment_benchmark.csv",
 }
 ALIGNMENT_DIRS = {
-    "full": REPO / "test_results/full_alignment_ealign/malisam/alignments",
-    "without_vector": REPO
-    / "test_results/full_alignment_ealign_without_vector/malisam/alignments",
-    "without_3di": REPO
-    / "test_results/full_alignment_ealign_without_3di/malisam/alignments",
+    "full": DETAIL_ROOT / "alignments/full",
+    "without_vector": DETAIL_ROOT / "alignments/without_vector",
+    "without_3di": DETAIL_ROOT / "alignments/without_3di",
 }
 
 
@@ -77,7 +75,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=REPO / "test_results/ealign_score_mechanisms",
+        default=RESULT_ROOT / "coherent_shift",
     )
     args = parser.parse_args()
     if args.min_block_length < 1:

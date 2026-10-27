@@ -9,21 +9,31 @@ import json
 from pathlib import Path
 from statistics import mean, median
 
-from run_pairwise_alignment import BENCHMARKS, REPO, TIMING_SCOPE, ca_sequence, load_cases
+from run_pairwise_alignment import (
+    BENCHMARKS,
+    REPO,
+    TIMING_SCOPE,
+    ca_sequence,
+    load_cases,
+    sha256,
+)
 
-METHODS = ("ealign", "deepalign", "tmalign", "dali")
+METHODS = (
+    "ealign", "deepalign", "tmalign", "dali", "gtalign_cuda",
+    "gtalign_patched_cpu", "gtalign_patched_cpu_t20", "foldseek",
+)
+DEFAULT_METHODS = ("ealign", "deepalign", "tmalign", "dali")
+PAIRWISE_ROOT = REPO / "test_results/pairwise_runs"
 DEFAULT_ROOTS = {
-    "ealign": REPO / "test_results/runtime_ealign",
-    "deepalign": REPO / "test_results/runtime_deepalign",
-    "tmalign": REPO / "test_results/runtime_tmalign",
+    method: PAIRWISE_ROOT
+    for method in METHODS
+    if method != "dali"
 }
 DEFAULT_DALI_ROOTS = {
-    benchmark: REPO / (
-        f"test_results/{benchmark}_dali"
-    )
+    benchmark: PAIRWISE_ROOT / "dali" / benchmark
     for benchmark in BENCHMARKS
 }
-DEFAULT_OUTPUT = REPO / "test_results/runtime_summary.csv"
+DEFAULT_OUTPUT = REPO / "test_results/01_pairwise_alignment/runtime_summary.csv"
 
 
 def dataset_statistics(benchmarks: list[str], split_root: Path) -> dict[str, dict]:
@@ -75,16 +85,34 @@ def validated_runtimes(
     successful = {}
     failures = []
     for case_id, result in saved.items():
-        if method != "dali" and result.get("timing_scope") != TIMING_SCOPE:
+        # EAlign and DeepAlign paper runs predate the explicit timing_scope
+        # metadata field. Their `seconds` values were measured at the same
+        # subprocess wall-clock boundary as current runs.
+        if method != "dali" and result.get("timing_scope") not in (None, TIMING_SCOPE):
             raise ValueError(
                 f"Wrong timing scope for {benchmark}/{method}/{case_id}: "
                 f"{result.get('timing_scope')!r}"
             )
         case = dataset["cases"][case_id]
-        expected_paths = (case.pdb_a.resolve(), case.pdb_b.resolve())
-        saved_paths = (Path(result["pdb_a"]).resolve(), Path(result["pdb_b"]).resolve())
-        if saved_paths != expected_paths and not (method == "dali" and saved_paths == expected_paths[::-1]):
-            raise ValueError(f"Input pair changed for {benchmark}/{method}/{case_id}")
+        expected_hashes = (sha256(case.pdb_a), sha256(case.pdb_b))
+        if method == "dali":
+            recorded_hashes = (
+                result.get("pdb_sha256", {}).get("query"),
+                result.get("pdb_sha256", {}).get("target"),
+            )
+            if recorded_hashes not in (expected_hashes, expected_hashes[::-1]):
+                raise ValueError(
+                    f"Input pair changed for {benchmark}/{method}/{case_id}"
+                )
+        else:
+            recorded_hashes = result.get("sha256", {})
+            if (
+                recorded_hashes.get("pdb_a"),
+                recorded_hashes.get("pdb_b"),
+            ) != expected_hashes:
+                raise ValueError(
+                    f"Input pair changed for {benchmark}/{method}/{case_id}"
+                )
         valid_statuses = {"hit", "no_hit"} if method == "dali" else {"ok"}
         if result.get("status") in valid_statuses:
             seconds = float(result["seconds"])
@@ -155,9 +183,12 @@ def show(rows: list[dict], benchmarks: list[str]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--benchmarks", nargs="+", choices=BENCHMARKS, default=list(BENCHMARKS))
-    parser.add_argument("--ealign-root", type=Path, default=DEFAULT_ROOTS["ealign"])
-    parser.add_argument("--deepalign-root", type=Path, default=DEFAULT_ROOTS["deepalign"])
-    parser.add_argument("--tmalign-root", type=Path, default=DEFAULT_ROOTS["tmalign"])
+    parser.add_argument("--methods", nargs="+", choices=METHODS, default=list(DEFAULT_METHODS))
+    for method, default_root in DEFAULT_ROOTS.items():
+        parser.add_argument(
+            f"--{method.replace('_', '-')}-root", dest=f"{method}_root",
+            type=Path, default=default_root,
+        )
     parser.add_argument("--dali-malisam-root", type=Path, default=DEFAULT_DALI_ROOTS["malisam"])
     parser.add_argument("--dali-malidup-root", type=Path, default=DEFAULT_DALI_ROOTS["malidup"])
     parser.add_argument("--dali-homstrad-root", type=Path, default=DEFAULT_DALI_ROOTS["homstrad"])
@@ -177,7 +208,7 @@ def main() -> None:
     datasets = dataset_statistics(args.benchmarks, args.split_root)
     roots = {
         method: getattr(args, f"{method}_root").resolve()
-        for method in METHODS if method != "dali"
+        for method in args.methods if method != "dali"
     }
     dali_roots = {
         benchmark: getattr(args, f"dali_{benchmark}_root").resolve()
@@ -192,7 +223,7 @@ def main() -> None:
                 args.allow_incomplete,
             )
         for benchmark in args.benchmarks
-        for method in METHODS
+        for method in args.methods
     ]
 
     args.output = args.output.resolve()

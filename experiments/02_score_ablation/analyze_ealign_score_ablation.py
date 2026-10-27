@@ -27,30 +27,23 @@ import numpy as np
 
 
 REPO = Path(__file__).resolve().parents[2]
+INPUT_ROOT = REPO / "test_results/02_score_ablation/ablation_inputs"
 DEFAULT_VARIANTS = (
     (
         "without_aa",
-        REPO
-        / "test_results/full_alignment_ealign_without_aa"
-        / "ealign_without_aa_alignment_benchmark.csv",
+        INPUT_ROOT / "ealign_without_aa_alignment_benchmark.csv",
     ),
     (
         "without_3di",
-        REPO
-        / "test_results/full_alignment_ealign_without_3di"
-        / "ealign_without_3di_alignment_benchmark.csv",
+        INPUT_ROOT / "ealign_without_3di_alignment_benchmark.csv",
     ),
     (
         "without_vector",
-        REPO
-        / "test_results/full_alignment_ealign_without_vector"
-        / "ealign_without_vector_alignment_benchmark.csv",
+        INPUT_ROOT / "ealign_without_vector_alignment_benchmark.csv",
     ),
     (
         "without_distance",
-        REPO
-        / "test_results/full_alignment_ealign_without_distance"
-        / "ealign_without_distance_alignment_benchmark.csv",
+        INPUT_ROOT / "ealign_without_distance_alignment_benchmark.csv",
     ),
 )
 DEFAULT_DATASETS = ("homstrad", "malidup", "malisam")
@@ -67,8 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--full-csv",
         type=Path,
-        default=REPO
-        / "test_results/full_alignment_ealign/ealign_alignment_benchmark.csv",
+        default=INPUT_ROOT / "ealign_alignment_benchmark.csv",
     )
     parser.add_argument(
         "--variant",
@@ -93,7 +85,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=REPO / "test_results/ealign_score_ablation_statistics",
+        default=REPO
+        / "test_results/02_score_ablation/ealign_score_ablation_statistics",
     )
     args = parser.parse_args()
     if args.bootstrap <= 0:

@@ -1,0 +1,13 @@
+diff --git a/src/libmymp/mpbatch/MpBatch.cpp b/src/libmymp/mpbatch/MpBatch.cpp
+index 67105a1..9cc3566 100644
+--- a/src/libmymp/mpbatch/MpBatch.cpp
++++ b/src/libmymp/mpbatch/MpBatch.cpp
+@@ -85,6 +85,8 @@ MpBatch::~MpBatch()
+     MYMSG("MpBatch::~MpBatch", 4);
+
+     if(cbpfin_) {
++        // Ensure the pending Finalize request has completed before termination.
++        cbpfin_->waitForDataAccess();
+         cbpfin_->Notify(TdFinalizer::cubpthreadmsgTerminate);
+         cbpfin_.reset();
+     }

@@ -15,9 +15,11 @@ CPPFLAGS = -DALI3_POSE_REFINEMENT_MODE=$(ALI3_POSE_REFINEMENT_MODE) \
     -DEALIGN_BOUNDED_DP_REFINEMENT=$(EALIGN_BOUNDED_DP_REFINEMENT)
 CXXFLAGS = -O3
 
+SRC_DIR = src
+BUILD_DIR = build
 TARGET = binary/ealign
 
-SOURCES := \
+SOURCE_NAMES := \
     StringUtils.cpp GeometryUtils.cpp ConformationLetters.cpp main.cpp \
     StructureLoader.cpp StructureInput.cpp StructureWriter.cpp PdbUtils.cpp \
     ResidueGeometry.cpp PDB_Residue.cpp PDB_Chain.cpp PDB_File.cpp \
@@ -27,24 +29,30 @@ SOURCES := \
     TMRefiner.cpp EnvironmentScorer.cpp BetaCarbonBuilder.cpp \
     SpatialAlignmentProposal.cpp Foldseek3Di.cpp
 
-OBJECTS := $(SOURCES:.cpp=.o)
+SOURCES := $(addprefix $(SRC_DIR)/,$(SOURCE_NAMES))
+OBJECTS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SOURCES))
+DEPS := $(OBJECTS:.o=.d)
 
 .PHONY: all clean clean-objects
 
 all: $(TARGET)
 
 $(TARGET): $(OBJECTS) | binary
-	$(CXX) -o $@ $(OBJECTS)
-	rm -f $(OBJECTS)
+	$(CXX) $(CXXFLAGS) -o $@ $(OBJECTS)
 
 binary:
 	mkdir -p $@
 
-%.o: %.cpp
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
+$(BUILD_DIR):
+	mkdir -p $@
+
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | $(BUILD_DIR)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -I$(SRC_DIR) -MMD -MP -c $< -o $@
 
 clean-objects:
-	rm -f $(OBJECTS)
+	rm -f $(OBJECTS) $(DEPS)
 
 clean:
-	rm -f $(TARGET) $(OBJECTS)
+	rm -f $(TARGET) $(OBJECTS) $(DEPS)
+
+-include $(DEPS)

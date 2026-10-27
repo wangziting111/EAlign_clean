@@ -24,13 +24,13 @@ from matplotlib.lines import Line2D
 
 
 REPO = Path(__file__).resolve().parents[2]
-DEFAULT_CASES = REPO / "test_results/ealign_score_mechanisms/maximum_rescued_cases.csv"
-FULL_DIR = REPO / "test_results/full_alignment_ealign/malisam/alignments"
+RESULT_ROOT = REPO / "test_results/02_score_ablation"
+DETAIL_ROOT = RESULT_ROOT / "ablation_details"
+DEFAULT_CASES = RESULT_ROOT / "coherent_shift/maximum_rescued_cases.csv"
+FULL_DIR = DETAIL_ROOT / "alignments/full"
 VARIANT_DIRS = {
-    "without_vector": REPO
-    / "test_results/full_alignment_ealign_without_vector/malisam/alignments",
-    "without_3di": REPO
-    / "test_results/full_alignment_ealign_without_3di/malisam/alignments",
+    "without_vector": DETAIL_ROOT / "alignments/without_vector",
+    "without_3di": DETAIL_ROOT / "alignments/without_3di",
 }
 VARIANT_LABELS = {
     "without_vector": r"w/o orientation $V$",
@@ -50,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=REPO / "test_results/ealign_score_mechanisms/figures",
+        default=RESULT_ROOT / "mechanism_explore/extrem_cases",
     )
     parser.add_argument("--dpi", type=int, default=240)
     return parser.parse_args()
@@ -296,7 +296,9 @@ def main() -> None:
             fontsize=8,
         )
 
-        stem = args.output_dir / f"{pair_id}_alignment_patterns"
+        correspondence_dir = args.output_dir / pair_id / "correspondence"
+        correspondence_dir.mkdir(parents=True, exist_ok=True)
+        stem = correspondence_dir / f"{pair_id}_alignment_patterns"
         fig.savefig(stem.with_suffix(".png"), dpi=args.dpi, bbox_inches="tight")
         fig.savefig(stem.with_suffix(".pdf"), bbox_inches="tight")
         fig.savefig(stem.with_suffix(".svg"), bbox_inches="tight")
