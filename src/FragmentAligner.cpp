@@ -14,6 +14,17 @@
 #error "ALI3_POSE_REFINEMENT_MODE must be 0, 1, 2, or 3"
 #endif
 
+// 0: rank transformations by geometric support, then run CombinedScore full DP for Top-K;
+// 1: rank every seed transformation by geometry-only dense full DP, then run
+//    the original CombinedScore full DP for Top-K.
+#ifndef EALIGN_CANDIDATE_SCREENING_MODE
+#define EALIGN_CANDIDATE_SCREENING_MODE 0
+#endif
+
+#if EALIGN_CANDIDATE_SCREENING_MODE < 0 || EALIGN_CANDIDATE_SCREENING_MODE > 1
+#error "EALIGN_CANDIDATE_SCREENING_MODE must be 0 or 1"
+#endif
+
 namespace
 {
 double ScoreTransformedQueryAgainstTarget(const XYZ *query, int query_length,
@@ -851,23 +862,30 @@ double FragmentAligner::Pipeline_Full(XYZ *m1,XYZ *m2,int n1,int n2,
 	Pipeline_Input(m1,m2,n1,n2);
 	Other_Fragment_Init();
 	TM_Precompute_Vector_Cache(m1,m2,n1,n2);
-#if ALI3_POSE_REFINEMENT_MODE == 3
+#if EALIGN_CANDIDATE_SCREENING_MODE == 1
+	// Use the same raw pivot budget as Select_Best_Pivot, but do not compute
+	// geometric-support scores: every seed transformation will reach full DP.
+	int available=(int)SFP_High.size();
+	if(available>ZM_TopJ)available=ZM_TopJ;
+	if(available>Fragment_Maximal)available=Fragment_Maximal;
+#elif ALI3_POSE_REFINEMENT_MODE == 3
 	// SFP_High is already stably sorted by descending 3Di seed score.
 	const int available=(int)SFP_High.size();
 #else
 	const int available=Select_Best_Pivot(1,INI_CUT,INI_CUT,SFP_High,ZM_TopJ);
 #endif
 	Global_Pipeline_Init();
-	const int pose_shortlist_limit=
-		(ALI3_POSE_REFINEMENT_MODE==0 || ALI3_POSE_REFINEMENT_MODE==3)?
-		top_k_limit:top_l_limit;
+	const int pose_shortlist_limit=EALIGN_CANDIDATE_SCREENING_MODE==1?
+		available:
+		((ALI3_POSE_REFINEMENT_MODE==0 || ALI3_POSE_REFINEMENT_MODE==3)?
+			top_k_limit:top_l_limit);
 	const int evolution_top_l=available<pose_shortlist_limit?
 		available:pose_shortlist_limit;
 	vector <SpatialPoseCandidate> evolution_poses;
 	evolution_poses.reserve(evolution_top_l);
 	for(int rank=0;rank<evolution_top_l;rank++)
 	{
-#if ALI3_POSE_REFINEMENT_MODE == 3
+#if EALIGN_CANDIDATE_SCREENING_MODE == 1 || ALI3_POSE_REFINEMENT_MODE == 3
 		const int pivot_index=rank;
 #else
 		const int pivot_index=head_index[rank];
@@ -877,17 +895,23 @@ double FragmentAligner::Pipeline_Full(XYZ *m1,XYZ *m2,int n1,int n2,
 		SpatialPoseCandidate candidate(proposal_capacity);
 		candidate.pivot_index=pivot_index;
 
-#if ALI3_POSE_REFINEMENT_MODE == 3
+#if EALIGN_CANDIDATE_SCREENING_MODE == 1 || ALI3_POSE_REFINEMENT_MODE == 3
 		const SFP_Record &seed=SFP_High[pivot_index];
 		if(make_center(seed.ii,seed.jj,seed.winlen,candidate.rotmat,
 			m1,m2,n1,n2)<0.0)continue;
-		candidate.proposal_score=seed.score;
 #else
 		EqualArray(candidate.rotmat,center_mat+12*pivot_index,12);
+#endif
 
 #if ALI3_POSE_REFINEMENT_MODE == 0
-		// Select_Best_Pivot already computed the R0 nearest-neighbor support.
+		#if EALIGN_CANDIDATE_SCREENING_MODE == 1
+		candidate.proposal_score=seed.score;
+		#else
+		// Select_Best_Pivot computed the R0 nearest-neighbor support.
 		candidate.proposal_score=head_score[pivot_index]/1000.0;
+		#endif
+#elif ALI3_POSE_REFINEMENT_MODE == 3
+		candidate.proposal_score=seed.score;
 #else
 		if(!candidate.proposal.BuildFromCoordinates(m1,n1,m2,n2,
 			candidate.rotmat,radius))continue;
@@ -922,9 +946,29 @@ double FragmentAligner::Pipeline_Full(XYZ *m1,XYZ *m2,int n1,int n2,
 			candidate.rotmat,radius))continue;
 		candidate.proposal_score=candidate.proposal.BestNeighborScore(d0);
 #endif
-#endif
 		evolution_poses.push_back(candidate);
 	}
+#if EALIGN_CANDIDATE_SCREENING_MODE == 1
+	// Replace order-relaxed geometric support with a score-only,
+	// order-preserving distance DP for every seed transformation.  With zero
+	// gap penalties, the terminal state is the optimal accumulated geometry
+	// score; no score matrix or traceback is needed for candidate ranking.  The
+	// selected Top-K still enter the original CombinedScore full DP below.
+	vector <SpatialPoseCandidate> geometry_ranked_poses;
+	geometry_ranked_poses.reserve(evolution_poses.size());
+	for(size_t rank=0;rank<evolution_poses.size();rank++)
+	{
+		SpatialPoseCandidate candidate=evolution_poses[rank];
+		EqualArray(pipeline_rotmat,candidate.rotmat,12);
+		rot_mol(m1,TM_tmp1,n1,pipeline_rotmat);
+		const double geometry_score=TM_Align_Get_Score_coarse_geometry_fullDP(
+			TM_tmp1,m2,n1,n2);
+		if(geometry_score<=0.0)continue;
+		candidate.proposal_score=geometry_score/smaller;
+		geometry_ranked_poses.push_back(candidate);
+	}
+	evolution_poses.swap(geometry_ranked_poses);
+#endif
 	stable_sort(evolution_poses.begin(),evolution_poses.end(),SpatialPoseScoreGreater);
 	const int evolution_selected=(int)evolution_poses.size()<top_k_limit?
 		(int)evolution_poses.size():top_k_limit;

@@ -521,6 +521,51 @@ void TMAligner::TM_Align_Get_Ali_coarse_fullDP(XYZ *mol1,XYZ *mol2,int moln1,int
 	}
 }
 
+// Score-only, order-preserving DP using distance geometry.  Candidate
+// screening needs only D[moln1][moln2], so keep the shorter sequence on the
+// rolling dimension and do not materialize the score or traceback matrices.
+double TMAligner::TM_Align_Get_Score_coarse_geometry_fullDP(
+	XYZ *mol1,XYZ *mol2,int moln1,int moln2)
+{
+	const int smaller=moln1<moln2?moln1:moln2;
+	if(smaller==0)return 0.0;
+	if(TM_CALC==0)Calc_TM_d0(smaller);
+
+	const XYZ *row_mol=mol1;
+	const XYZ *column_mol=mol2;
+	int row_count=moln1;
+	int column_count=moln2;
+	if(moln1<moln2)
+	{
+		row_mol=mol2;
+		column_mol=mol1;
+		row_count=moln2;
+		column_count=moln1;
+	}
+
+	const double d0_square=d0*d0;
+	vector <double> dp(column_count+1,0.0);
+	for(int i=1;i<=row_count;i++)
+	{
+		double previous_diagonal=dp[0];
+		for(int j=1;j<=column_count;j++)
+		{
+			const double previous_row=dp[j];
+			const double distance_square=
+				row_mol[i-1].distance_square(column_mol[j-1]);
+			const double geometry_score=
+				1.0/(1.0+distance_square/d0_square);
+			double best=dp[j-1];
+			if(previous_row>best)best=previous_row;
+			const double diagonal_score=previous_diagonal+geometry_score;
+			if(diagonal_score>best)best=diagonal_score;
+			dp[j]=best;
+			previous_diagonal=previous_row;
+		}
+	}
+	return dp[column_count];
+}
+
 //------ calc TMScorer -------// return real TMscore
 double TMAligner::TM_Align_TM_Score(XYZ *mol1,XYZ *mol2,int moln1,int moln2,int *ali2,
 	int norm_len,double norm_d0,double &rmsd,int &lali,double *MAXSCO)

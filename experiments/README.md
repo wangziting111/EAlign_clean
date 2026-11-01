@@ -244,6 +244,60 @@ TM-align and GTalign use shorter-length-normalized TM-score. Foldseek is
 evaluated with both bit score and probability. The seven single-class SupFP
 queries are excluded consistently from all metrics.
 
+## 4. local-to-global ablation:
+
+binary and build
+1. 3Di rank only (without geometry consensus screening):
+
+  ```bash
+  make clean-objects
+  make -j8 \
+    TARGET=binary/ealign_seed_score_only \
+    ALI3_POSE_REFINEMENT_MODE=3
+  ```
+2. turn geometry consensus screening to full DP screening
+  ```bash
+  make clean-objects
+  make -j8 \
+    TARGET=binary/ealign_screen_full_dp \
+    EALIGN_CANDIDATE_SCREENING_MODE=1
+  ```
+
+pairwise run and evaluate:
+```bash
+python3 experiments/01_pairwise_alignment/run_pairwise_alignment.py \
+  --method ealign \
+  --binary binary/ealign_screen_full_dp \
+  --benchmarks malisam malidup homstrad \
+  --output-root test_results/pairwise_ablation/ealign_screen_full_dp \
+  --split-root test_results/HOMSTRAD_split_structures \
+  --workers 1 
+
+python3 experiments/01_pairwise_alignment/run_pairwise_alignment.py \
+  --method ealign \
+  --binary binary/ealign_seed_score_only \
+  --benchmarks malisam malidup homstrad \
+  --output-root test_results/pairwise_ablation/ealign_seed_score_only \
+  --split-root test_results/HOMSTRAD_split_structures \
+  --workers 1 
+
+python3 experiments/01_pairwise_alignment/evaluate_pairwise_alignment.py \
+  --methods ealign \
+  --benchmarks malisam malidup homstrad \
+  --binary-root test_results/pairwise_ablation/ealign_screen_full_dp \
+  --split-root test_results/HOMSTRAD_split_structures \
+  --output-root test_results/pairwise_ablation/evaluation/ealign_screen_full_dp
+
+python3 experiments/01_pairwise_alignment/evaluate_pairwise_alignment.py \
+  --methods ealign \
+  --benchmarks malisam malidup homstrad \
+  --binary-root test_results/pairwise_ablation/ealign_seed_score_only \
+  --split-root test_results/HOMSTRAD_split_structures \
+  --output-root test_results/pairwise_ablation/evaluation/ealign_seed_score_only
+
+```
+
+
 ## Useful options
 
 - `--limit N`: run a small pairwise or ablation smoke test.

@@ -76,7 +76,9 @@ public:
 	void TM_Align_Get_Matrix(XYZ *mol1,XYZ *mol2,int moln1,int moln2,double d0,double *score);
 	void TM_Align_Get_Matrix_TMs(XYZ *mol1,XYZ *mol2,int moln1,int moln2,double d0,double *score);
 	double TM_Align_Get_Score(XYZ *mol1,XYZ *mol2,int moln1,int moln2,int *ali2,int NOTM=0);
-  void TM_Align_Get_Ali_coarse_fullDP(XYZ *mol1,XYZ *mol2,int moln1,int moln2,int *ali2);
+	void TM_Align_Get_Ali_coarse_fullDP(XYZ *mol1,XYZ *mol2,int moln1,int moln2,int *ali2);
+	double TM_Align_Get_Score_coarse_geometry_fullDP(XYZ *mol1,XYZ *mol2,
+		int moln1,int moln2);
 	//main function
 	double TM_Align_TM_Score(XYZ *mol1,XYZ *mol2,int moln1,int moln2,int *ali2,
 		int norm_len,double norm_d0,double &rmsd,int &lali,double *MAXSCO=0); //MAXSCO should at least double[8]
