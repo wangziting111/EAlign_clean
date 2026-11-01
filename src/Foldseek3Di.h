@@ -11,6 +11,10 @@ class Foldseek3Di
 public:
 	static const int STATE_COUNT=20;
 	static const int INVALID_STATE=2;
+	// Foldseek mat3di.out order: state 0..19 maps to these 3Di symbols.
+	// The symbols are structural-state labels, not amino-acid identities;
+	// consequently INVALID_STATE (2) is serialized as the symbol 'D'.
+	static const char STATE_ALPHABET[STATE_COUNT+1];
 
 	static void Encode(const PDB_Residue *residues,const XYZ *ca,
 		int length,int *states);

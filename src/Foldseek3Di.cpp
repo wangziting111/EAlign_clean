@@ -7,6 +7,9 @@
 #include <stdexcept>
 #include <vector>
 
+const char Foldseek3Di::STATE_ALPHABET[Foldseek3Di::STATE_COUNT+1]=
+	"ACDEFGHIKLMNPQRSTVWY";
+
 namespace
 {
 	const double PI=3.14159265358979323846;
