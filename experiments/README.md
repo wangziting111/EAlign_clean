@@ -107,6 +107,7 @@ python3 experiments/01_pairwise_alignment/summarize_pairwise_runtime.py \
   --output test_results/01_pairwise_alignment/runtime_summary_supplement.csv
 
 python3 experiments/01_pairwise_alignment/summarize_geometry_superposition.py
+python3 experiments/01_pairwise_alignment/summarize_ealign_alignment_score.py
 python3 experiments/01_pairwise_alignment/plot_homstrad_runtime_deciles.py
 python3 experiments/01_pairwise_alignment/plot_homstrad_runtime_deciles.py \
   --all-methods

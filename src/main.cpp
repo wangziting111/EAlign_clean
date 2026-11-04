@@ -3,6 +3,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <map>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -687,6 +690,13 @@ void Linear_Transform(double *in_mat,int moln1,int moln2,double *out_mat)
 		if(wscur>wsmax)wsmax=wscur;
 		if(wscur<wsmin)wsmin=wscur;
 	}
+	if(wsmax<=wsmin)
+	{
+		// A constant evidence matrix has no defined min-max scale.  Retain
+		// uniform evidence so that geometry can still drive the alignment.
+		for(i=0;i<totnum;i++)out_mat[i]=1.0;
+		return;
+	}
 	for(i=0;i<totnum;i++)
 	{
 		wscur=in_mat[i];
@@ -827,6 +837,100 @@ void Generate_3Di(PDB_Residue *pdb,XYZ *ca,int moln,int *three_di)
 	Foldseek3Di::Encode(pdb,ca,moln,three_di);
 }
 
+// Refit externally supplied one-to-one residue correspondences and score them
+// with the same normalized EAlign objective used by the alignment program.
+static int Run_Score_Pairs(PairwiseAligner &aligner,const string &pair_file)
+{
+	ifstream input(pair_file.c_str());
+	if(!input)
+	{
+		fprintf(stderr,"PAIR FILE NOT FOUND!!!![%s]\n",pair_file.c_str());
+		return 2;
+	}
+
+	map<string, vector<pair<int,int> > > methods;
+	string line;
+	int line_number=0;
+	while(getline(input,line))
+	{
+		line_number++;
+		if(line.empty() || line[0]=='#')continue;
+		istringstream row(line);
+		string method;
+		int first=-1;
+		int second=-1;
+		if(!(row>>method>>first>>second))
+		{
+			if(line_number==1)continue; // optional header
+			fprintf(stderr,"Malformed pair row %d in %s\n",
+				line_number,pair_file.c_str());
+			return 2;
+		}
+		if(first<0 || first>=TM_MOLN1 || second<0 || second>=TM_MOLN2)
+		{
+			fprintf(stderr,"Out-of-range pair at row %d in %s: %d %d\n",
+				line_number,pair_file.c_str(),first,second);
+			return 2;
+		}
+		methods[method].push_back(make_pair(first,second));
+	}
+	if(methods.empty())
+	{
+		fprintf(stderr,"No residue pairs in %s\n",pair_file.c_str());
+		return 2;
+	}
+
+	#if EALIGN_ALIGNMENT_EVIDENCE_MODE == EALIGN_NO_EVIDENCE
+		aligner.TMali_Weight=nullptr;
+	#else
+		Weight_Matrix_Built_WS(TM_AMI1,TM_CLE1,TM_3DI1,
+			TM_AMI2,TM_CLE2,TM_3DI2,wswei);
+		Linear_Transform(wswei,TM_MOLN1,TM_MOLN2,wswei);
+		aligner.TMali_Weight=wswei;
+	#endif
+	aligner.TM_Vect_Score=EALIGN_ALIGNMENT_GEOMETRY_MODE;
+	aligner.TM_Wei_Score=0;
+	aligner.d0=aligner.Calc_TM_d0_Simp(min(TM_MOLN1,TM_MOLN2));
+
+	printf("method\tlen1\tlen2\taligned_pairs\tscore_sum\tmean_per_aligned_pair\n");
+	for(map<string, vector<pair<int,int> > >::const_iterator it=methods.begin();
+		it!=methods.end();++it)
+	{
+		vector<int> ali1(TM_MOLN1,-1);
+		vector<int> ali2(TM_MOLN2,-1);
+		for(size_t k=0;k<it->second.size();k++)
+		{
+			const int first=it->second[k].first;
+			const int second=it->second[k].second;
+			if(ali1[first]>=0 || ali2[second]>=0)
+			{
+				fprintf(stderr,"Non-one-to-one %s alignment in %s at %d %d\n",
+					it->first.c_str(),pair_file.c_str(),first,second);
+				return 2;
+			}
+			ali1[first]=second;
+			ali2[second]=first;
+		}
+		if(it->second.size()<3)
+		{
+			fprintf(stderr,"Fewer than three pairs for %s in %s\n",
+				it->first.c_str(),pair_file.c_str());
+			return 2;
+		}
+
+		double rotmat[12];
+		double rmsd=0.0;
+		const int aligned=(int)aligner.Final_Rot_Ali(rotmat,rmsd,
+			TM_MOL1,TM_MOL2,TM_MOLN1,TM_MOLN2,&ali1[0],&ali2[0]);
+		const double score=aligner.TM_Align_Get_Score_Simp(
+			TM_MOL1,TM_MOL2,rotmat,TM_MOLN1,TM_MOLN2,&ali2[0]);
+		printf("%s\t%d\t%d\t%d\t%.12f\t%.12f\n",
+			it->first.c_str(),TM_MOLN1,TM_MOLN2,aligned,score,
+			score/aligned);
+	}
+	return 0;
+}
+
 // Run the one alignment mode used by run_full_alignment_benchmark_copy.py.
 static int Run_Alignment(PairwiseAligner &aligner, string &name1,
 	string &name2, const string &output_base, string &screen_output)
@@ -867,9 +971,9 @@ static int Run_Alignment(PairwiseAligner &aligner, string &name1,
 		pair_view.Restore();
 		char line[1024];
 		snprintf(line, sizeof(line),
-			"%s %s %4d %4d -> %6d %6d %9.2f -> %4d %7.3f %7.3f -> %6.3f %6.3f %6.3f -> %5d %5d %6.3f %.3f\n",
+			"%s %s %4d %4d -> %6d %6d %9.2f %11.6f -> %4d %7.3f %7.3f -> %6.3f %6.3f %6.3f -> %5d %5d %6.3f %.3f\n",
 			name1.c_str(), name2.c_str(), TM_MOLN1, TM_MOLN2,
-			0, 0, 0.0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0,
+			0, 0, 0.0, 0.0, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0,
 			norm_len, distance_cutoff, 0.0);
 		screen_output = line;
 		return 0;
@@ -877,6 +981,19 @@ static int Run_Alignment(PairwiseAligner &aligner, string &name1,
 
 	pair_view.RestoreResults(TM_ALIGNMENT);
 	pair_view.Restore();
+
+	// Rebuild the normalized evidence matrix after restoring the user's
+	// original input order.  The canonical alignment view may have transposed
+	// the pair, while TMali_Weight is stored in row-major mol1 x mol2 order.
+	#if EALIGN_ALIGNMENT_EVIDENCE_MODE == EALIGN_NO_EVIDENCE
+		aligner.TMali_Weight = nullptr;
+	#else
+		Weight_Matrix_Built_WS(
+			TM_AMI1, TM_CLE1, TM_3DI1,
+			TM_AMI2, TM_CLE2, TM_3DI2, wswei);
+		Linear_Transform(wswei, TM_MOLN1, TM_MOLN2, wswei);
+		aligner.TMali_Weight = wswei;
+	#endif
 
 	for (int i = 0; i < TM_MOLN2; ++i) {
 		TM_ALIGNMENT[i] = aligner.Pairwise_align_tot[0].alignment[i];
@@ -951,6 +1068,9 @@ static int Run_Alignment(PairwiseAligner &aligner, string &name1,
 	const double combined_score = aligner.TM_Align_Get_Score_Simp_MatchWei(
 		TM_MOL1, TM_MOL2, TM_ROTMAT, TM_MOLN1, TM_MOLN2,
 		TM_ALIGNMENT, match_wei);
+	const double ealign_score = aligner.TM_Align_Get_Score_Simp(
+		TM_MOL1, TM_MOL2, TM_ROTMAT, TM_MOLN1, TM_MOLN2,
+		TM_ALIGNMENT);
 	const double gdt_ts = (score_parts[1] + score_parts[2] +
 		score_parts[3] + score_parts[4]) / (4.0 * norm_len);
 	const double gdt_ha = (score_parts[0] + score_parts[1] +
@@ -964,10 +1084,12 @@ static int Run_Alignment(PairwiseAligner &aligner, string &name1,
 	if (fp == 0) {
 		fprintf(stderr, "ERROR: file %s can't be opened. \n", filename.c_str());
 	} else {
-		fprintf(fp, "#name1 name2 len1 len2 -> BLOSUM 3DiScore CombinedScore -> LALI RMSDval TMscore -> MAXSUB GDT_TS GDT_HA -> SeqID nLen dCutoff uGDT\n");
-		fprintf(fp, " %s %s %4d %4d -> %6d %6d %9.2f -> %4d %7.3f %7.3f -> %6.3f %6.3f %6.3f -> %5d %5d %6.3f %.3f\n",
+		fprintf(fp, "#name1 name2 len1 len2 -> BLOSUM 3DiScore CombinedScore EAlignScore -> LALI RMSDval TMscore -> MAXSUB GDT_TS GDT_HA -> SeqID nLen dCutoff uGDT\n");
+		fprintf(fp, "#EAlignScore uses pairwise min-max-normalized BLOSUM+3Di evidence, local orientation consistency, and the distance kernel.\n");
+		fprintf(fp, " %s %s %4d %4d -> %6d %6d %9.2f %11.6f -> %4d %7.3f %7.3f -> %6.3f %6.3f %6.3f -> %5d %5d %6.3f %.3f\n",
 			name1.c_str(), name2.c_str(), TM_MOLN1, TM_MOLN2,
-			blosum, three_di_score, combined_score, aligned_length, rms, tm_score,
+			blosum, three_di_score, combined_score, ealign_score,
+			aligned_length, rms, tm_score,
 			maxsub, gdt_ts, gdt_ha, seqid, norm_len, distance_cutoff, ugdt);
 		fprintf(fp, "#---------------- transformation to superpose 1st structure onto the 2nd ------------------------\n");
 		fprintf(fp, "%9.6f %9.6f %9.6f %12.6f\n", TM_ROTMAT[0], TM_ROTMAT[1], TM_ROTMAT[2], TM_ROTMAT[9]);
@@ -994,10 +1116,11 @@ static int Run_Alignment(PairwiseAligner &aligner, string &name1,
 	output += line;
 	snprintf(line, sizeof(line), "#----- Distance cutoff value is %lf\n", distance_cutoff);
 	output += line;
-	snprintf(line, sizeof(line), "# BLOSUM 3DiScore CombinedScore SeqID LALI RMSD(A) TMscore MAXSUB GDT_TS GDT_HA uGDT\n");
+	snprintf(line, sizeof(line), "# BLOSUM 3DiScore CombinedScore EAlignScore SeqID LALI RMSD(A) TMscore MAXSUB GDT_TS GDT_HA uGDT\n");
 	output += line;
-	snprintf(line, sizeof(line), "  %6d %6d %9.2f %5d %4d %7.3f %7.3f %6.3f %6.3f %6.3f %.3f\n",
-		blosum, three_di_score, combined_score, seqid, aligned_length, rms,
+	snprintf(line, sizeof(line), "  %6d %6d %9.2f %11.6f %5d %4d %7.3f %7.3f %6.3f %6.3f %6.3f %.3f\n",
+		blosum, three_di_score, combined_score, ealign_score,
+		seqid, aligned_length, rms,
 		tm_score, maxsub, gdt_ts, gdt_ha, ugdt);
 	output += line;
 	snprintf(line, sizeof(line), "#----- Transformation to superpose the 1st protein onto the 2nd ---#\n");
@@ -1018,19 +1141,23 @@ static int Run_Alignment(PairwiseAligner &aligner, string &name1,
 static void Usage(const char *program)
 {
 	fprintf(stderr, "Usage: %s protein_1 protein_2 -p 1 -o output_base\n", program);
+	fprintf(stderr, "       %s --score-pairs protein_1 protein_2 pairs.tsv\n", program);
 }
 
 int main(int argc, char **argv)
 {
-	if (argc != 7 || strcmp(argv[3], "-p") != 0 || strcmp(argv[4], "1") != 0 ||
-		strcmp(argv[5], "-o") != 0 || argv[6][0] == '\0') {
+	const bool score_pairs=argc==5 && strcmp(argv[1],"--score-pairs")==0;
+	const bool align=argc==7 && strcmp(argv[3],"-p")==0 &&
+		strcmp(argv[4],"1")==0 && strcmp(argv[5],"-o")==0 &&
+		argv[6][0]!='\0';
+	if(!score_pairs && !align) {
 		Usage(argv[0]);
 		return 2;
 	}
 
-	string pdb1 = argv[1];
-	string pdb2 = argv[2];
-	const string output_base = argv[6];
+	string pdb1 = score_pairs ? argv[2] : argv[1];
+	string pdb2 = score_pairs ? argv[3] : argv[2];
+	const string output_base = score_pairs ? "" : argv[6];
 	string range = "_";
 	StructureLoader input1;
 	StructureLoader input2;
@@ -1087,6 +1214,12 @@ int main(int argc, char **argv)
 	aligner.SparseDP_filter = 0;
 	aligner.TM_cb1 = TM_MCB1;
 	aligner.TM_cb2 = TM_MCB2;
+	if(score_pairs)
+	{
+		const int status=Run_Score_Pairs(aligner,argv[4]);
+		TM_Align_dele_WS();
+		return status;
+	}
 
 	string screen_output;
 	Run_Alignment(aligner, name1, name2, output_base, screen_output);

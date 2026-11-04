@@ -83,7 +83,17 @@ def parse_score(path: Path) -> dict:
         if not line.strip() or line.startswith("#"):
             continue
         fields = line.split()
-        if len(fields) < 21 or fields[4] != "->" or fields[8] != "->":
+        if len(fields) >= 22 and fields[4] == "->" and fields[9] == "->":
+            offset = 1
+            ealign_score = float(fields[8])
+        elif len(fields) >= 21 and fields[4] == "->" and fields[8] == "->":
+            # Backward compatibility with outputs written before EAlignScore
+            # was added to the score record.
+            offset = 0
+            ealign_score = None
+        else:
+            raise ValueError(f"unexpected EAlign score record: {line}")
+        if fields[12 + offset] != "->" or fields[16 + offset] != "->":
             raise ValueError(f"unexpected EAlign score record: {line}")
         return {
             "name1": fields[0],
@@ -93,16 +103,17 @@ def parse_score(path: Path) -> dict:
             "blosum": float(fields[5]),
             "score_3di": float(fields[6]),
             "combined_score": float(fields[7]),
-            "lali": int(fields[9]),
-            "rmsd": float(fields[10]),
-            "tmscore": float(fields[11]),
-            "maxsub": float(fields[13]),
-            "gdt_ts": float(fields[14]),
-            "gdt_ha": float(fields[15]),
-            "seqid": float(fields[17]),
-            "normalization_length": int(fields[18]),
-            "dcutoff": float(fields[19]),
-            "ugdt": float(fields[20]),
+            "ealign_score": ealign_score,
+            "lali": int(fields[9 + offset]),
+            "rmsd": float(fields[10 + offset]),
+            "tmscore": float(fields[11 + offset]),
+            "maxsub": float(fields[13 + offset]),
+            "gdt_ts": float(fields[14 + offset]),
+            "gdt_ha": float(fields[15 + offset]),
+            "seqid": float(fields[17 + offset]),
+            "normalization_length": int(fields[18 + offset]),
+            "dcutoff": float(fields[19 + offset]),
+            "ugdt": float(fields[20 + offset]),
         }
     raise ValueError(f"no EAlign score record in {path}")
 
@@ -203,7 +214,7 @@ def write_summary(output_root: Path, results: list[dict]) -> Path:
         "record_id", "source_line", "pair_id", "group_id", "pair_type", "label",
         "sid1", "sid2", "pdb1", "pdb2", "status", "cached",
         "alignment_seconds",
-        "len1", "len2", "combined_score", "lali", "rmsd", "tmscore",
+        "len1", "len2", "combined_score", "ealign_score", "lali", "rmsd", "tmscore",
         "maxsub", "gdt_ts", "gdt_ha", "seqid", "normalization_length",
         "dcutoff", "ugdt", "error", "result_json",
     )

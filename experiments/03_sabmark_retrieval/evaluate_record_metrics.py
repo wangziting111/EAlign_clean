@@ -37,12 +37,12 @@ METHODS = (
         "score_definition": "deep_score/min(length1,length2)",
     },
     {
-        "name": "EAlign_CombinedScore_per_minlen",
+        "name": "EAlign_EAlignScore_per_minlen",
         "directory": "ealign",
         "filename": "ealign_results.tsv",
-        "score_column": "combined_score",
+        "score_column": "ealign_score",
         "length_columns": ("len1", "len2"),
-        "score_definition": "combined_score/min(len1,len2)",
+        "score_definition": "ealign_score/min(len1,len2)",
     },
     {
         "name": "GTalign_CPU_TMscore_minlen",
