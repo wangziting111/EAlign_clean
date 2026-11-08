@@ -29,12 +29,48 @@ METHODS = (
         "score_definition": "tm_score_minlen",
     },
     {
+        "name": "TMalign_querylen",
+        "directory": "tmalign",
+        "filename": "tmalign_results.tsv",
+        "directional_score_columns": ("tm_score1", "tm_score2"),
+        "normalization_side": "query",
+        "length_columns": None,
+        "score_definition": "tm_score normalized by query length",
+    },
+    {
+        "name": "TMalign_targetlen",
+        "directory": "tmalign",
+        "filename": "tmalign_results.tsv",
+        "directional_score_columns": ("tm_score1", "tm_score2"),
+        "normalization_side": "target",
+        "length_columns": None,
+        "score_definition": "tm_score normalized by target length",
+    },
+    {
         "name": "DeepAlign_DeepScore_per_minlen",
         "directory": "deepalign",
         "filename": "deepalign_results.tsv",
         "score_column": "deep_score",
         "length_columns": ("length1", "length2"),
         "score_definition": "deep_score/min(length1,length2)",
+    },
+    {
+        "name": "DeepAlign_DeepScore_per_querylen",
+        "directory": "deepalign",
+        "filename": "deepalign_results.tsv",
+        "score_column": "deep_score",
+        "length_columns": ("length1", "length2"),
+        "normalization_side": "query",
+        "score_definition": "deep_score/query_length",
+    },
+    {
+        "name": "DeepAlign_DeepScore_per_targetlen",
+        "directory": "deepalign",
+        "filename": "deepalign_results.tsv",
+        "score_column": "deep_score",
+        "length_columns": ("length1", "length2"),
+        "normalization_side": "target",
+        "score_definition": "deep_score/target_length",
     },
     {
         "name": "EAlign_EAlignScore_per_minlen",
@@ -45,12 +81,54 @@ METHODS = (
         "score_definition": "ealign_score/min(len1,len2)",
     },
     {
+        "name": "EAlign_EAlignScore_per_querylen",
+        "directory": "ealign",
+        "filename": "ealign_results.tsv",
+        "score_column": "ealign_score",
+        "length_columns": ("len1", "len2"),
+        "normalization_side": "query",
+        "score_definition": "ealign_score/query_length",
+    },
+    {
+        "name": "EAlign_EAlignScore_per_targetlen",
+        "directory": "ealign",
+        "filename": "ealign_results.tsv",
+        "score_column": "ealign_score",
+        "length_columns": ("len1", "len2"),
+        "normalization_side": "target",
+        "score_definition": "ealign_score/target_length",
+    },
+    {
         "name": "GTalign_CPU_TMscore_minlen",
         "directory": "gtalign_cpu_patched_t2_w16",
         "filename": "gtalign_results.tsv",
         "score_column": "tm_score_minlen",
         "length_columns": None,
         "score_definition": "tm_score_minlen",
+    },
+    {
+        "name": "GTalign_CPU_TMscore_querylen",
+        "directory": "gtalign_cpu_patched_t2_w16",
+        "filename": "gtalign_results.tsv",
+        "directional_score_columns": (
+            "tm_score_query",
+            "tm_score_reference",
+        ),
+        "normalization_side": "query",
+        "length_columns": None,
+        "score_definition": "tm_score normalized by query length",
+    },
+    {
+        "name": "GTalign_CPU_TMscore_targetlen",
+        "directory": "gtalign_cpu_patched_t2_w16",
+        "filename": "gtalign_results.tsv",
+        "directional_score_columns": (
+            "tm_score_query",
+            "tm_score_reference",
+        ),
+        "normalization_side": "target",
+        "length_columns": None,
+        "score_definition": "tm_score normalized by target length",
     },
     {
         "name": "Foldseek_bit_score",
@@ -141,6 +219,7 @@ def build_relations(records: dict[str, dict]) -> list[dict]:
                     **common,
                     "query_sid": record["sid1"],
                     "target_sid": record["sid2"],
+                    "query_side": 1,
                     "label": 1,
                 }
             )
@@ -149,6 +228,7 @@ def build_relations(records: dict[str, dict]) -> list[dict]:
                     **common,
                     "query_sid": record["sid2"],
                     "target_sid": record["sid1"],
+                    "query_side": 2,
                     "label": 1,
                 }
             )
@@ -158,6 +238,7 @@ def build_relations(records: dict[str, dict]) -> list[dict]:
                     **common,
                     "query_sid": record["sid1"],
                     "target_sid": record["sid2"],
+                    "query_side": 1,
                     "label": 0,
                 }
             )
@@ -169,7 +250,7 @@ def load_method_scores(
     path: Path,
     method: dict,
     records: dict[str, dict],
-) -> dict[str, float]:
+) -> dict[str, tuple[float, float]]:
     rows = read_tsv(path)
     by_id = {}
 
@@ -206,17 +287,51 @@ def load_method_scores(
                     f"expected {expected!r}"
                 )
 
-        score = float(row[method["score_column"]])
-        if method["length_columns"] is not None:
-            left, right = method["length_columns"]
-            length1, length2 = int(row[left]), int(row[right])
-            if length1 <= 0 or length2 <= 0:
-                raise RuntimeError(f"{path}: invalid lengths for {record_id}")
-            score /= min(length1, length2)
+        normalization_side = method.get("normalization_side")
+        directional_columns = method.get("directional_score_columns")
 
-        if not math.isfinite(score):
+        if directional_columns is not None:
+            side1_column, side2_column = directional_columns
+            side1_score = float(row[side1_column])
+            side2_score = float(row[side2_column])
+            if normalization_side == "query":
+                forward_score, reverse_score = side1_score, side2_score
+            elif normalization_side == "target":
+                forward_score, reverse_score = side2_score, side1_score
+            else:
+                raise RuntimeError(
+                    f"{method['name']}: directional scores require "
+                    "normalization_side=query or target"
+                )
+        else:
+            score = float(row[method["score_column"]])
+            forward_score = reverse_score = score
+
+            if method["length_columns"] is not None:
+                left, right = method["length_columns"]
+                length1, length2 = int(row[left]), int(row[right])
+                if length1 <= 0 or length2 <= 0:
+                    raise RuntimeError(f"{path}: invalid lengths for {record_id}")
+
+                if normalization_side == "query":
+                    forward_score /= length1
+                    reverse_score /= length2
+                elif normalization_side == "target":
+                    forward_score /= length2
+                    reverse_score /= length1
+                elif normalization_side is None:
+                    denominator = min(length1, length2)
+                    forward_score /= denominator
+                    reverse_score /= denominator
+                else:
+                    raise RuntimeError(
+                        f"{method['name']}: unsupported normalization_side "
+                        f"{normalization_side!r}"
+                    )
+
+        if not math.isfinite(forward_score) or not math.isfinite(reverse_score):
             raise RuntimeError(f"{path}: non-finite score for {record_id}")
-        scores[record_id] = score
+        scores[record_id] = (forward_score, reverse_score)
 
     return scores
 
@@ -263,7 +378,7 @@ def evaluate_method(
     subset: str,
     method: dict,
     relations: list[dict],
-    scores: dict[str, float],
+    scores: dict[str, tuple[float, float]],
 ) -> tuple[dict, list[dict]]:
     queries = defaultdict(lambda: {"labels": [], "scores": [], "targets": []})
 
@@ -271,7 +386,8 @@ def evaluate_method(
         query_key = (relation["group_id"], relation["query_sid"])
         query = queries[query_key]
         query["labels"].append(relation["label"])
-        query["scores"].append(scores[relation["record_id"]])
+        relation_scores = scores[relation["record_id"]]
+        query["scores"].append(relation_scores[relation["query_side"] - 1])
         query["targets"].append(relation["target_sid"])
 
     metric_values = {"auroc": [], "average_precision": [], "roc1": []}
