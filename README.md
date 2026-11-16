@@ -89,9 +89,13 @@ experiments/
 ```
 
 Benchmark datasets and saved analysis results are provided as separate ZIP
-archives in this repository. Third-party executables are not bundled. See
-`experiments/README.md` for the expected directory layout,
-dependencies, exact commands, output locations, and benchmark protocol.
+archives in this repository and are also archived on Zenodo at
+[https://doi.org/10.5281/zenodo.23476316](https://doi.org/10.5281/zenodo.23476316).
+The exact EAlign software version used for the paper is archived at
+[https://zenodo.org/records/24269904](https://zenodo.org/records/24269904).
+Third-party executables are not bundled. See `experiments/README.md` for the
+expected directory layout, dependencies, exact commands, output locations,
+and benchmark protocol.
 
 The reported experiments used CentOS Linux 8, GCC/G++ 8.5.0, two Intel Xeon
 Gold 5218 CPUs, and CPU-only execution.
